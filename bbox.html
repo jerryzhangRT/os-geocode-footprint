@@ -1,0 +1,221 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="initial-scale=1,maximum-scale=1,user-scalable=no" />
+    <title>OS Features API | Paging Example | Mapbox GL JS</title>
+    <link rel="stylesheet" href="https://labs.os.uk/public/os-api-branding/v0.3.0/os-api-branding.css" />
+    <link rel="stylesheet" href="https://api.tiles.mapbox.com/mapbox-gl-js/v1.13.1/mapbox-gl.css" />
+    <style>
+        body { margin:0; padding:0; }
+        #map { position:absolute; top:0; bottom:0; width:100%; }
+    </style>
+</head>
+<body>
+
+<style>
+    .map-overlay {
+        font: 14px/20px 'Helvetica Neue', Arial, Helvetica, sans-serif;
+        position: absolute;
+        top: 0;
+        left: 0;
+        width: 220px;
+        padding: 10px;
+    }
+    .map-overlay-inner {
+        background-color: #fff;
+        box-shadow: 0 1px 2px rgba(0, 0, 0, 0.1);
+        border-radius: 4px;
+        padding: 10px;
+    }
+    .map-overlay-inner div {
+        display: block;
+    }
+    .map-overlay-inner div:first-of-type {
+        margin-top: 8px;
+    }
+    .map-overlay-inner span {
+        font-weight: 600;
+    }
+    .map-overlay-inner a {
+        color: #00f;
+    }
+    .map-overlay-inner .message {
+        color: #c00;
+        display: none;
+    }
+</style>
+
+<div id="map"></div>
+<div class="map-overlay">
+    <div class="map-overlay-inner">
+        <button id="request">Find Greenspace</button>
+        <div>Number of requests made: <span id="request-count">0</span></div>
+        <div>Total features: <span id="feature-count"></span></div>
+        <div class="message">All features have been returned.<br>Click <a href="#" onclick="reset(); return false">here</a> to reset page.</div>
+    </div>
+</div>
+
+<script src="https://labs.os.uk/public/os-api-branding/v0.3.0/os-api-branding.js"></script>
+<script src="https://api.tiles.mapbox.com/mapbox-gl-js/v1.13.1/mapbox-gl.js"></script>
+<script>
+
+    var apiKey = '';
+
+    var wfsServiceUrl = 'https://api.os.uk/features/v1/wfs',
+        tileServiceUrl = 'https://api.os.uk/maps/raster/v1/zxy';
+
+    // Create a map style object using the ZXY service.
+    var style = {
+        "version": 8,
+        "sources": {
+            "raster-tiles": {
+                "type": "raster",
+                "tiles": [ tileServiceUrl + "/Light_3857/{z}/{x}/{y}.png?key=" + apiKey ],
+                "tileSize": 256,
+                "maxzoom": 20
+            }
+        },
+        "layers": [{
+            "id": "os-maps-zxy",
+            "type": "raster",
+            "source": "raster-tiles"
+        }]
+    };
+
+    // Initialize the map object.
+    var map = new mapboxgl.Map({
+        container: 'map',
+        minZoom: 6,
+        maxZoom: 19,
+        style: style,
+        maxBounds: [
+            [ -10.76418, 49.528423 ],
+            [ 1.9134116, 61.331151 ]
+        ],
+        center: [ -0.126, 51.502 ],
+        zoom: 13,
+        interactive: false
+    });
+
+    // Create an empty GeoJSON FeatureCollection.
+    var geoJson = {
+        "type": "FeatureCollection",
+        "features": []
+    };
+
+    // Add event which waits for the map to be loaded.
+    map.on('load', function() {
+        // Add an empty GeoJSON layer for the Greenspace features.
+        map.addLayer({
+            "id": "greenspace",
+            "type": "fill",
+            "source": {
+                "type": "geojson",
+                "data": geoJson
+            },
+            "layout": {},
+            "paint": {
+                "fill-color": "#0c0"
+            }
+        });
+    });
+
+    var intCount = 100, // Maximum number of features to be returned in a single response.
+        intStartIndex = 0; // Initial result to start from when returning a response.
+
+    // Add an event listener to handle when the user clicks the 'Find Greenspace' button.
+    document.getElementById('request').addEventListener('click', function() {
+        // Get the visible map bounds.
+        var bounds = map.getBounds();
+        console.log({bounds});
+        // Convert the bounds to a formatted BBOX string.
+        var sw = bounds.getSouthWest().lat + ',' + bounds.getSouthWest().lng,
+            ne = bounds.getNorthEast().lat + ',' + bounds.getNorthEast().lng;
+
+        var coords = sw + ' ' + ne;
+        console.log({coords})
+        // Create an OGC XML filter parameter value which will select the Greenspace
+        // features intersecting the BBOX coordinates.
+        var xml = '<ogc:Filter>';
+        xml += '<ogc:BBOX>';
+        xml += '<ogc:PropertyName>SHAPE</ogc:PropertyName>';
+        xml += '<gml:Box srsName="urn:ogc:def:crs:EPSG::4326">';
+        xml += '<gml:coordinates>' + coords + '</gml:coordinates>';
+        xml += '</gml:Box>';
+        xml += '</ogc:BBOX>';
+        xml += '</ogc:Filter>';
+
+        // Define (WFS) parameters object.
+        var wfsParams = {
+            key: apiKey,
+            service: 'WFS',
+            request: 'GetFeature',
+            version: '2.0.0',
+            typeNames: 'Zoomstack_Greenspace',
+            outputFormat: 'GEOJSON',
+            srsName: 'urn:ogc:def:crs:EPSG::4326',
+            filter: xml,
+            count: intCount,
+            startIndex: intStartIndex
+        };
+
+        // Use fetch() method to request GeoJSON data from the OS Features API.
+        //
+        // If successful - set the GeoJSON data for the 'greenspace' layer and re-render
+        // the map.
+        //
+        // Calls can be made until the number of features returned is less than the
+        // requested count, at which point it can be assumed that all features for
+        // the query have been returned, and there is no need to request further pages.
+        fetch(getUrl(wfsParams))
+            .then(response => response.json())
+            .then(data => {
+                geoJson.features.push.apply(geoJson.features, data.features);
+
+                map.getSource('greenspace').setData(geoJson);
+
+                document.getElementById('request-count').innerHTML = Math.ceil(geoJson.features.length / intCount);
+                document.getElementById('feature-count').innerHTML = geoJson.features.length;
+
+                if( data.features.length < intCount ) {
+                    document.getElementById('request').disabled = true;
+                    document.getElementsByClassName('message')[0].style.display = 'block';
+                }
+
+                intStartIndex += intCount;
+            });
+    });
+
+    /**
+     * Return URL with encoded parameters.
+     * @param {object} params - The parameters object to be encoded.
+     */
+    function getUrl(params) {
+        var encodedParameters = Object.keys(params)
+            .map(paramName => paramName + '=' + encodeURI(params[paramName]))
+            .join('&');
+
+        return wfsServiceUrl + '?' + encodedParameters;
+    }
+
+    /**
+     * Reset example.
+     */
+    function reset() {
+        intCount = 100;
+        intStartIndex = 0;
+
+        geoJson.features.length = 0;
+        map.getSource('greenspace').setData(geoJson);
+
+        document.getElementById('request').disabled = false;
+        document.getElementById('request-count').innerHTML = intStartIndex;
+        document.getElementById('feature-count').innerHTML = '';
+        document.getElementsByClassName('message')[0].style.display = 'none';
+    }
+
+</script>
+
+</body>
+</html>
